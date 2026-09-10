@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dashboard de Producción</title>
+  <!-- Chart.js para gráficos -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- PapaParse para procesar CSV -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js"></script>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card-bg: #1e293b;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+      --accent: #38bdf8;
+      --accent-hover: #0284c7;
+      --negative: #ef4444;
+      --border: #334155;
+    }
+
+    body {
+      margin: 0;
+      padding: 20px;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      background-color: var(--bg);
+      color: var(--text);
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 1.8rem;
+    }
+
+    #data-max-date {
+      color: var(--text-muted);
+      font-size: 0.9rem;
+    }
+
+    #upload-status {
+      padding: 10px;
+      background: var(--card-bg);
+      border-radius: 6px;
+      margin-bottom: 20px;
+      font-size: 0.9rem;
+      border: 1px solid var(--border);
+    }
+
+    .btn-manual {
+      display: inline-block;
+      margin-top: 5px;
+      padding: 6px 12px;
+      background-color: var(--accent);
+      color: #000;
+      border-radius: 4px;
+      cursor: pointer;
+      font-weight: bold;
+    }
+
+    .dashboard {
+      display: none;
+    }
+
+    .kpi-container {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 15px;
+      margin-bottom: 20px;
+    }
+
+    .kpi-card {
+      background: var(--card-bg);
+      padding: 15px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+    }
+
+    .kpi-card h3 {
+      margin: 0 0 10px 0;
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+    }
+
+    .kpi-card .value {
+      font-size: 1.5rem;
+      font-weight: bold;
+    }
+
+    .charts-container {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(450px, 1fr));
+      gap: 20px;
+    }
+
+    .chart-card {
+      background: var(--card-bg);
+      padding: 15px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+    }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    <header>
+      <h1>Dashboard de Producción</h1>
+      <div id="data-max-date">Cargando datos...</div>
+    </header>
+
+    <div id="upload-status">
+      Cargando archivo <code>datos.csv</code> automáticamente...
+    </div>
+
+    <div id="dashboard" class="dashboard">
+      <div class="kpi-container">
+        <div class="kpi-card">
+          <h3>Total Plan (KG)</h3>
+          <div class="value" id="kpi-plan">0</div>
+        </div>
+        <div class="kpi-card">
+          <h3>Total Real (KG)</h3>
+          <div class="value" id="kpi-real">0</div>
+        </div>
+        <div class="kpi-card">
+          <h3>Costo Plan Total</h3>
+          <div class="value" id="kpi-costo-plan">$0</div>
+        </div>
+        <div class="kpi-card">
+          <h3>Costo Real Total</h3>
+          <div class="value" id="kpi-costo-real">$0</div>
+        </div>
+      </div>
+
+      <div class="charts-container">
+        <div class="chart-card">
+          <canvas id="chartPlanVsReal"></canvas>
+        </div>
+        <div class="chart-card">
+          <canvas id="chartCostos"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let rawData = [];
+    let charts = {};
+
+    const fmtFecha = (d) => d.toLocaleDateString('es-ES', { year: 'numeric', month: '2-digit', day: '2-digit' });
+    const fmtNum = (n) => new Intl.NumberFormat('es-ES').format(n);
+    const fmtMoneda = (n) => new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(n);
+
+    window.addEventListener('DOMContentLoaded', () => {
+      // Carga directa del archivo local datos.csv alojado en GitHub
+      fetch('./datos.csv')
+        .then(response => {
+          if (!response.ok) {
+            throw new Error(`Estado HTTP: ${response.status}`);
+          }
+          return response.text();
+        })
+        .then(csvText => {
+          procesarTextoCSV(csvText);
+        })
+        .catch(err => {
+          console.error("Error al cargar datos.csv:", err);
+          const statusEl = document.getElementById('upload-status');
+          statusEl.innerHTML = `
+            <span style="color: var(--negative);">No se pudo cargar 'datos.csv' automáticamente.</span><br>
+            <label class="btn-manual">
+              Cargar datos.csv manualmente
+              <input type="file" accept=".csv" style="display:none" onchange="cargarArchivoLocal(event)">
+            </label>
+          `;
+        });
+    });
+
+    function cargarArchivoLocal(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      Papa.parse(file, {
+        header: true,
+        skipEmptyLines: true,
+        complete: function(results) {
+          procesarResultadosPapa(results);
+        }
+      });
+    }
+
+    function procesarTextoCSV(csvText) {
+      Papa.parse(csvText, {
+        header: true,
+        skipEmptyLines: true,
+        complete: function(results) {
+          procesarResultadosPapa(results);
+        }
+      });
+    }
+
+    function procesarResultadosPapa(results) {
+      if (results.errors && results.errors.length > 0 && results.data.length === 0) {
+        alert("Ocurrió un error al leer el formato del archivo CSV.");
+        return;
+      }
+      
+      let maxDateObj = null;
+
+      rawData = results.data.map(d => {
+        const planNum = parseFloat(String(d['Cant_Plan_(KG)'] || d.plan || 0).replace(/\./g, '').replace(',', '.')) || 0;
+        const realNum = parseFloat(String(d['Cant_Real_(KG)'] || d.real || 0).replace(/\./g, '').replace(',', '.')) || 0;
+        const costoPlanNum = parseFloat(String(d['Costo_Plan'] || d.costoPlan || 0).replace(/\./g, '').replace(',', '.')) || 0;
+        const costoRealNum = parseFloat(String(d['Costo_Real'] || d.costoReal || 0).replace(/\./g, '').replace(',', '.')) || 0;
+
+        const fechaVal = d['Fecha'] || d.fecha || '';
+        let fObj = fechaVal ? new Date(String(fechaVal).replace(/-/g, '/')) : null;
+        if (fObj && !isNaN(fObj) && (!maxDateObj || fObj > maxDateObj)) {
+          maxDateObj = fObj;
+        }
+
+        return {
+          plan: planNum,
+          real: realNum,
+          costoPlan: costoPlanNum,
+          costoReal: costoRealNum,
+          fecha: (fObj && !isNaN(fObj)) ? fObj : null
+        };
+      });
+      
+      if (maxDateObj) {
+        document.getElementById('data-max-date').textContent = `Última actualización: ${fmtFecha(maxDateObj)}`;
+      }
+      
+      document.getElementById('upload-status').style.display = 'none';
+      document.getElementById('dashboard').style.display = 'block';
+      
+      renderizarDashboard();
+    }
+
+    function renderizarDashboard() {
+      const totPlan = rawData.reduce((acc, curr) => acc + curr.plan, 0);
+      const totReal = rawData.reduce((acc, curr) => acc + curr.real, 0);
+      const totCostoPlan = rawData.reduce((acc, curr) => acc + curr.costoPlan, 0);
+      const totCostoReal = rawData.reduce((acc, curr) => acc + curr.costoReal, 0);
+
+      document.getElementById('kpi-plan').textContent = fmtNum(totPlan) + ' KG';
+      document.getElementById('kpi-real').textContent = fmtNum(totReal) + ' KG';
+      document.getElementById('kpi-costo-plan').textContent = fmtMoneda(totCostoPlan);
+      document.getElementById('kpi-costo-real').textContent = fmtMoneda(totCostoReal);
+
+      // Gráfico Plan vs Real
+      const ctx1 = document.getElementById('chartPlanVsReal').getContext('2d');
+      if (charts.planVsReal) charts.planVsReal.destroy();
+      charts.planVsReal = new Chart(ctx1, {
+        type: 'bar',
+        data: {
+          labels: ['Volumen (KG)'],
+          datasets: [
+            { label: 'Plan', data: [totPlan], backgroundColor: '#38bdf8' },
+            { label: 'Real', data: [totReal], backgroundColor: '#4ade80' }
+          ]
+        },
+        options: { responsive: true, plugins: { title: { display: true, text: 'Plan vs Real (KG)', color: '#f8fafc' } } }
+      });
+
+      // Gráfico Costos
+      const ctx2 = document.getElementById('chartCostos').getContext('2d');
+      if (charts.costos) charts.costos.destroy();
+      charts.costos = new Chart(ctx2, {
+        type: 'bar',
+        data: {
+          labels: ['Costos ($)'],
+          datasets: [
+            { label: 'Costo Plan', data: [totCostoPlan], backgroundColor: '#facc15' },
+            { label: 'Costo Real', data: [totCostoReal], backgroundColor: '#f87171' }
+          ]
+        },
+        options: { responsive: true, plugins: { title: { display: true, text: 'Costo Plan vs Costo Real', color: '#f8fafc' } } }
+      });
+    }
+  </script>
+</body>
+</html>
